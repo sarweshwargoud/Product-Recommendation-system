@@ -1,3 +1,8 @@
+# Datasets
 amz_uk_processed_data.csv
 *.csv
 data/
+
+# Python cache
+__pycache__/
+*.pyc
