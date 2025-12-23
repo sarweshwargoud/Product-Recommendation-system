@@ -1,207 +1,330 @@
 import pandas as pd
+import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-
+from sklearn.metrics.pairwise import linear_kernel, cosine_similarity
 import re
+import os
 
 class RecommenderSystem:
     def __init__(self):
         self.df_products = None
         self.df_ratings = None
         self.tfidf_matrix = None
-        self.cosine_sim = None
-        self.indices = None
+        self.vectorizer = None
         self.categories = []
         self.brands = []
+        self.user_item_matrix = None
+        self.item_similarity = None
+        self.collab_indices = None
+        
+        # Known brands for cleaner extraction
+        self.POPULAR_BRANDS = [
+            'Apple', 'Samsung', 'HP', 'Dell', 'Lenovo', 'Asus', 'Acer', 'Microsoft', 
+            'Sony', 'Canon', 'Nikon', 'Fujifilm', 'GoPro', 'Garmin', 'Fitbit', 
+            'Bose', 'JBL', 'Sennheiser', 'Marshall', 'Beats', 'Xiaomi', 'Realme', 
+            'OnePlus', 'Google', 'Oppo', 'Vivo', 'Huawei', 'Motorola', 'Nokia', 'Amazon',
+            'Logitech', 'Razer', 'Corsair', 'SteelSeries', 'HyperX', 'Adidas', 'Nike', 'Puma',
+            'Casio', 'Fossil', 'Tommy Hilfiger', 'Armani', 'Rolex', 'Seiko'
+        ]
 
-    def load_data(self, products_path='products.csv', ratings_path='ratings.csv'):
-        """Loads products and ratings data."""
+    def load_data(self, products_path='amz_uk_processed_data.csv', ratings_path='ratings.csv'):
+        """Loads data with stratified sampling to ensure category diversity."""
         try:
-            self.df_products = pd.read_csv(products_path)
-            self.df_ratings = pd.read_csv(ratings_path)
+            print("Loading data...")
+            if 'amz_uk' in products_path:
+                # 1. Define Categories and Quotas
+                target_categories = [
+                    'Laptops', 
+                    'Mobile Phones & Smartphones', 
+                    'Headphones & Earphones', 
+                    'Smartwatches', 
+                    'Cameras', 'Digital Cameras', 'Action Cameras',
+                    'PC Gaming Accessories',
+                    'Shoes', 'Watches'
+                ]
+                
+                # We want ~2500 items per category group to get a good mix
+                quota_per_cat = 2500
+                collected_counts = {cat: 0 for cat in target_categories}
+                chunks_to_concat = []
+                
+                # Clean Price Function (GBP -> INR)
+                def clean_price(p):
+                    try:
+                        p_str = str(p).replace('£', '').replace(',', '').strip()
+                        return int(float(p_str) * 105)
+                    except:
+                        return 0
+
+                # Brand Extraction Function
+                def extract_brand(title):
+                    if not isinstance(title, str): return "Generic"
+                    title_upper = title.upper()
+                    for brand in self.POPULAR_BRANDS:
+                        # Check distinct word or at start
+                        pattern = r'\b' + re.escape(brand.upper()) + r'\b'
+                        if re.search(pattern, title_upper):
+                            return brand
+                    # Fallback: First word
+                    return title.split()[0] if title else "Generic"
+
+                print(f"Scanning for {target_categories}...")
+                
+                if not os.path.exists(products_path):
+                    raise FileNotFoundError
+
+                # scan the whole file efficiently
+                # We use a larger chunksize to speed up iteration
+                for chunk in pd.read_csv(products_path, chunksize=100000):
+                    # For each target category, grab rows if we haven't met quota
+                    relevant_mask = pd.Series(False, index=chunk.index)
+                    
+                    for cat in target_categories:
+                        if collected_counts[cat] < quota_per_cat:
+                            # Match category or sub-category
+                            # (Simple strict match for now based on known csv values)
+                            cat_mask = chunk['categoryName'] == cat
+                            count_in_chunk = cat_mask.sum()
+                            
+                            if count_in_chunk > 0:
+                                # Add to relevant set
+                                relevant_mask = relevant_mask | cat_mask
+                                collected_counts[cat] += count_in_chunk
+                    
+                    # Store the relevant rows from this chunk
+                    if relevant_mask.any():
+                        chunks_to_concat.append(chunk[relevant_mask].copy())
+                    
+                    # Check if all quotas filed (limit total)
+                    if sum(collected_counts.values()) > 25000:
+                        print("Hit max dataset size limit (25k). Stopping scan.")
+                        break
+
+                if not chunks_to_concat:
+                    print("Warning: No target categories found. Loading head.")
+                    self.df_products = pd.read_csv(products_path, nrows=5000)
+                else:
+                    self.df_products = pd.concat(chunks_to_concat)
+                    print(f"Loaded {len(self.df_products)} items.")
+                    print("Counts per category:", collected_counts)
+
+                # Rename Columns
+                self.df_products.rename(columns={
+                    'asin': 'product_id',
+                    'title': 'name',
+                    'imgUrl': 'image_url',
+                    'categoryName': 'category',
+                    'stars': 'rating',
+                    'reviews': 'review_count'
+                }, inplace=True)
+
+                # Apply Transformations
+                self.df_products['price'] = self.df_products['price'].apply(clean_price)
+                self.df_products['brand'] = self.df_products['name'].apply(extract_brand)
+                self.df_products['description'] = self.df_products['name']
+                
+            else:
+                self.df_products = pd.read_csv(products_path)
+
+            # Metadata
+            self.categories = sorted(self.df_products['category'].astype(str).unique().tolist())
+            self.brands = sorted(self.df_products['brand'].astype(str).unique().tolist())
+
+            # 2. Ratings logic (Regenerate if needed)
+            regenerate = True
+            if os.path.exists(ratings_path):
+                try:
+                    self.df_ratings = pd.read_csv(ratings_path)
+                    if not self.df_ratings.empty:
+                        rated_ids = set(self.df_ratings['product_id'].unique())
+                        product_ids = set(self.df_products['product_id'].unique())
+                        overlap = rated_ids.intersection(product_ids)
+                        if len(overlap) > 500: # Ensure decent overlap
+                            regenerate = False
+                            print(f"Ratings loaded with {len(overlap)} overlaps.")
+                except:
+                    pass
             
-            # Extract unique categories and brands for filtering
-            self.categories = self.df_products['category'].unique().tolist()
-            self.brands = self.df_products['brand'].unique().tolist()
-            
+            if regenerate:
+                print("Regenerating ratings...")
+                self._generate_synthetic_ratings(ratings_path)
+
+            self._build_collaborative_model()
             print("Data loaded successfully.")
             return True
-        except FileNotFoundError:
-            print("Error: CSV files not found. Please generate data first.")
+            
+        except Exception as e:
+            print(f"Error loading data: {e}")
             return False
 
-    def preprocess(self):
-        """Preprocesses data and builds the content-based filtering model."""
-        if self.df_products is None:
-            return
+    def _generate_synthetic_ratings(self, path):
+        product_ids = self.df_products['product_id'].tolist()
+        ratings_data = []
+        user_ids = range(1, 101) 
+        for user_id in user_ids:
+            num_ratings = np.random.randint(5, 20)
+            rated_items = np.random.choice(product_ids, size=min(num_ratings, len(product_ids)), replace=False)
+            for pid in rated_items:
+                rating = np.random.choice([1, 2, 3, 4, 5], p=[0.05, 0.1, 0.2, 0.4, 0.25])
+                ratings_data.append([user_id, pid, rating])
+        self.df_ratings = pd.DataFrame(ratings_data, columns=['user_id', 'product_id', 'rating'])
+        self.df_ratings.to_csv(path, index=False)
 
-        # Combine text features for TF-IDF
+    def preprocess(self):
+        if self.df_products is None: return
+        
+        # Align index for TF-IDF
+        self.df_products.reset_index(drop=True, inplace=True)
+        
+        self.df_products['name'] = self.df_products['name'].fillna('')
+        self.df_products['category'] = self.df_products['category'].fillna('')
+        self.df_products['description'] = self.df_products['description'].fillna('')
+        
         self.df_products['combined_features'] = (
             self.df_products['name'] + " " + 
             self.df_products['category'] + " " + 
-            self.df_products['brand'] + " " +
             self.df_products['description']
         )
         
-        self.df_products['combined_features'] = self.df_products['combined_features'].fillna('')
+        self.vectorizer = TfidfVectorizer(stop_words='english')
+        self.tfidf_matrix = self.vectorizer.fit_transform(self.df_products['combined_features'])
+        print("TF-IDF Vectorization complete.")
 
-        # TF-IDF Vectorization
-        tfidf = TfidfVectorizer(stop_words='english')
-        self.tfidf_matrix = tfidf.fit_transform(self.df_products['combined_features'])
+    def _build_collaborative_model(self):
+        if self.df_ratings is None: return
+        self.user_item_matrix = self.df_ratings.pivot_table(index='product_id', columns='user_id', values='rating').fillna(0)
+        if not self.user_item_matrix.empty:
+            self.item_similarity = cosine_similarity(self.user_item_matrix)
+            self.collab_indices = pd.Series(range(len(self.user_item_matrix)), index=self.user_item_matrix.index)
+            print("Collaborative Model built.")
 
-        # Compute Cosine Similarity
-        self.cosine_sim = cosine_similarity(self.tfidf_matrix, self.tfidf_matrix)
-
-        # Create a reverse mapping of indices and product names
-        self.indices = pd.Series(self.df_products.index, index=self.df_products['name']).drop_duplicates()
-        print("Preprocessing complete. Model built.")
-
-    def recommend(self, query, category=None, top_n=8):
-        """
-        Smart recommendation logic with Price Parsing and Category Filtering.
-        """
-        if self.df_products is None:
-            return pd.DataFrame(columns=['name', 'category', 'brand', 'price', 'description', 'rating', 'review_count', 'image_url'])
-
-        query_lower = query.lower().strip() if query else ""
+    def get_collaborative_recommendations(self, user_id=1, top_n=10):
+        if self.user_item_matrix is None or user_id not in self.df_ratings['user_id'].values:
+            return pd.DataFrame()
+        user_ratings = self.df_ratings[self.df_ratings['user_id'] == user_id]
+        liked_items = user_ratings[user_ratings['rating'] > 3]['product_id'].tolist()
+        if not liked_items: return pd.DataFrame()
         
-        # --- Price Parsing ---
-        price_limit = None
-        # Regex for "under 50000", "below 50000", "for 50000"
-        price_match = re.search(r'(under|below|for|less than)\s+(\d+)', query_lower)
-        if price_match:
-            price_limit = int(price_match.group(2))
-            # Remove the price part from query to avoid text matching issues
-            query_lower = re.sub(r'(under|below|for|less than)\s+(\d+)', '', query_lower).strip()
-            print(f"Price Limit Detected: {price_limit}")
+        scores = {}
+        for item_id in liked_items:
+            if item_id in self.collab_indices:
+                idx = self.collab_indices[item_id]
+                sim_scores = self.item_similarity[idx]
+                for other_idx, score in enumerate(sim_scores):
+                    if score > 0:
+                        other_itm = self.user_item_matrix.index[other_idx]
+                        if other_itm not in liked_items:
+                            scores[other_itm] = scores.get(other_itm, 0) + score
+        sorted_items = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
+        valid_ids = [k for k,v in sorted_items]
+        return self.df_products[self.df_products['product_id'].isin(valid_ids)]
 
-        # Start with full dataset
+    def recommend(self, query, category=None, top_n=12, user_id=None):
+        if self.df_products is None: return pd.DataFrame()
+        
         df_filtered = self.df_products.copy()
-
-        # 1. Apply Price Filter
+        
+        # 1. Price Parsing
+        query_text = query.lower().strip() if query else ""
+        price_limit = None
+        match = re.search(r'(under|below|less than)\s+(\d+)', query_text)
+        if match:
+            try:
+                price_limit = int(match.group(2))
+                query_text = re.sub(r'(under|below|less than)\s+(\d+)', '', query_text).strip()
+            except: pass
+            
         if price_limit:
             df_filtered = df_filtered[df_filtered['price'] <= price_limit]
 
-        # 2. Apply Category Filter (Explicit)
+        # 2. Strict Filter Attempts (Relax able)
+        initial_count = len(df_filtered)
+        
+        # Detect Brand
+        found_brand = None
+        if query_text:
+            query_words = query_text.split()
+            for brand in self.POPULAR_BRANDS:
+                if any(brand.lower() == word for word in query_words):
+                    found_brand = brand
+                    break
+        
+        if found_brand:
+            # Soft filtering: We prefer brand matches
+            brand_subset = df_filtered[df_filtered['brand'] == found_brand]
+            if not brand_subset.empty:
+                df_filtered = brand_subset
+
+        # Detect Category Keyword
+        cat_keywords = {
+            'laptop': ['Laptops', 'Computers'],
+            'phone': ['Mobile', 'Phone', 'Smartphone'],
+            'watch': ['Watch', 'Wearable'],
+            'camera': ['Camera', 'Photo'],
+            'headphone': ['Headphone', 'Earphone'],
+            'shoe': ['Shoe', 'Sneaker']
+        }
+        
+        found_cat_kw = False
+        for kw, matches in cat_keywords.items():
+            if kw in query_text:
+                # Construct regex pattern
+                pattern = '|'.join(matches)
+                cat_subset = df_filtered[df_filtered['category'].str.contains(pattern, case=False, na=False)]
+                if not cat_subset.empty:
+                    df_filtered = cat_subset
+                    found_cat_kw = True
+                break
+        
+        # Widget Category Filter
         if category and category != "All":
             df_filtered = df_filtered[df_filtered['category'] == category]
-        
-        if df_filtered.empty:
-            return pd.DataFrame(columns=self.df_products.columns)
-
-        # If no query, just return top rated in the filtered set
-        if not query_lower:
-            return df_filtered.sort_values(['rating', 'review_count'], ascending=[False, False]).head(top_n)
-
-        # --- Logic on Filtered Data (Search) ---
-        
-        # 3. Category Match (Implicit from query, if not already filtered)
-        # Only check if explicit category wasn't provided
-        if not category or category == "All":
-            matched_category = next((cat for cat in self.categories if cat.lower() in query_lower or query_lower in cat.lower()), None)
-            if matched_category:
-                print(f"Category Match: {matched_category}")
-                # Filter by category
-                cat_filtered = df_filtered[df_filtered['category'] == matched_category].copy()
-                if not cat_filtered.empty:
-                    return cat_filtered.sort_values(['rating', 'review_count'], ascending=[False, False]).head(top_n)
-
-        # 4. Brand Match
-        matched_brand = next((brand for brand in self.brands if brand.lower() in query_lower or query_lower in brand.lower()), None)
-        
-        if matched_brand:
-            print(f"Brand Match: {matched_brand}")
-            brand_filtered = df_filtered[df_filtered['brand'] == matched_brand].copy()
-            if not brand_filtered.empty:
-                return brand_filtered.sort_values(['rating', 'review_count'], ascending=[False, False]).head(top_n)
-
-        # 5. Content-Based Similarity & Enhanced Search
-        
-        # Exact match check
-        exact_match = df_filtered[df_filtered['name'].str.lower() == query_lower]
-        if not exact_match.empty:
-            # Return exact match + similar items
-            # (Simplified: just return exact match for now to be precise)
-            return exact_match.head(top_n)
-
-        # Term-based scoring
-        terms = query_lower.split()
-        if not terms:
-             return df_filtered.sort_values('rating', ascending=False).head(top_n)
-        
-        def calculate_match_score(row):
-            score = 0
-            text = row['combined_features'].lower()
-            for term in terms:
-                if term in text:
-                    score += 1
-            return score
-
-        df_filtered['match_score'] = df_filtered.apply(calculate_match_score, axis=1)
-        
-        # Filter out rows with 0 match score
-        df_filtered = df_filtered[df_filtered['match_score'] > 0]
-        
-        if not df_filtered.empty:
-            # Sort by match score (desc), then rating (desc)
-            df_filtered = df_filtered.sort_values(['match_score', 'rating', 'review_count'], ascending=[False, False, False])
-            return df_filtered.head(top_n)
-
-        return pd.DataFrame(columns=self.df_products.columns)
-
-        # 3. Content-Based Similarity & Enhanced Search
-        # If query is complex (e.g. "Samsung Phone 5G"), we need to check description/combined features
-        
-        # First, check for exact product name match
-        if query in self.indices:
-            idx = self.indices[query]
-            if isinstance(idx, pd.Series):
-                idx = idx.iloc[0]
             
-            sim_scores = list(enumerate(self.cosine_sim[idx]))
-            sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
-            sim_scores = sim_scores[1:top_n+1]
-            product_indices = [i[0] for i in sim_scores]
+        # 3. Text Search (TF-IDF)
+        if query_text:
+            query_vec = self.vectorizer.transform([query_text])
             
-            recommendations = self.df_products.iloc[product_indices].copy()
-            recommendations['similarity_score'] = [round(i[1], 2) for i in sim_scores]
-            return recommendations
+            # Use Index Slicing. 
+            target_indices = df_filtered.index
+            
+            # Compute Sim
+            subset_tfidf = self.tfidf_matrix[target_indices]
+            sim_scores = linear_kernel(query_vec, subset_tfidf).flatten()
+            
+            df_filtered = df_filtered.copy() # Avoid SettingWithCopy
+            df_filtered['similarity'] = sim_scores
+            
+            # Sort
+            df_filtered = df_filtered.sort_values('similarity', ascending=False)
+            
+            # If we didn't find specific filters, assume general text search and filter weak matches
+            if not (found_brand or found_cat_kw):
+                df_filtered = df_filtered[df_filtered['similarity'] > 0]
+                
+        else:
+            df_filtered['similarity'] = 0
+            df_filtered = df_filtered.sort_values(['rating', 'review_count'], ascending=[False, False])
 
-        # If not exact match, try to filter by terms
-        # Split query into terms
-        terms = query_lower.split()
-        
-        # Start with all products
-        filtered = self.df_products.copy()
-        
-        # Filter products that contain ANY of the terms in their combined features
-        # But to be more specific, let's score them based on how many terms match
-        
-        def calculate_match_score(row):
-            score = 0
-            text = row['combined_features'].lower()
-            for term in terms:
-                if term in text:
-                    score += 1
-            return score
+        # 4. Fallback if empty (Relaxation)
+        if df_filtered.empty and initial_count > 0:
+            return self.recommend_fallback(query, price_limit, top_n)
 
-        filtered['match_score'] = filtered.apply(calculate_match_score, axis=1)
-        
-        # Filter out rows with 0 match score
-        filtered = filtered[filtered['match_score'] > 0]
-        
-        if not filtered.empty:
-            # Sort by match score (desc), then rating (desc)
-            filtered = filtered.sort_values(['match_score', 'rating', 'review_count'], ascending=[False, False, False])
-            return filtered.head(top_n)
+        return df_filtered.head(top_n)
 
-        return pd.DataFrame(columns=self.df_products.columns)
+    def recommend_fallback(self, query, price_limit, top_n):
+        # Just pure text search on main dataset
+        df = self.df_products.copy()
+        if price_limit:
+            df = df[df['price'] <= price_limit]
+            
+        try:
+            query_vec = self.vectorizer.transform([query])
+            sim_scores = linear_kernel(query_vec, self.tfidf_matrix).flatten()
+            df['similarity'] = sim_scores
+            return df[df['similarity'] > 0].sort_values('similarity', ascending=False).head(top_n)
+        except:
+            return pd.DataFrame()
 
-    def get_all_product_names(self):
-        if self.df_products is not None:
-            return self.df_products['name'].tolist()
-        return []
-    
     def get_all_categories(self):
         return self.categories
 
@@ -209,16 +332,9 @@ if __name__ == "__main__":
     rec = RecommenderSystem()
     if rec.load_data():
         rec.preprocess()
-        print("\nTest: Mobile")
-        res = rec.recommend("Mobile")
-        if not res.empty:
-            print(res[['name', 'rating', 'price']].head(3))
-        else:
-            print("No results for Mobile")
-            
-        print("\nTest: Samsung")
-        res = rec.recommend("Samsung")
-        if not res.empty:
-            print(res[['name', 'rating', 'price']].head(3))
-        else:
-            print("No results for Samsung")
+        # Non-ASCII chars can cause print issues in Windows terminals without chcp 65001
+        try:
+            print("Testing Search 'HP Laptop under 40000':")
+            print(rec.recommend("HP Laptop under 40000", top_n=5)[['name', 'brand', 'price']])
+        except:
+            print("Error printing results due to encoding.")

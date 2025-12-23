@@ -147,6 +147,9 @@ else:
     st.sidebar.info("Your wishlist is empty.")
 
 st.sidebar.markdown("---")
+# Collaborative Filtering Simulation
+target_user = st.sidebar.slider("👤 Simulate User ID", 1, 100, 1, help="Change user to see different collaborative recommendations")
+
 st.sidebar.markdown("### 📦 Categories")
 categories = rec.get_all_categories()
 selected_cat = st.sidebar.radio("Filter by:", ["All"] + categories)
@@ -154,13 +157,10 @@ selected_cat = st.sidebar.radio("Filter by:", ["All"] + categories)
 # Handle Query Params for Image Clicks
 if "view" in st.query_params:
     view_id = st.query_params["view"]
-    try:
-        view_id = int(view_id)
-        st.session_state[f"details_{view_id}"] = True
-        st.query_params.clear()
-        st.rerun()
-    except ValueError:
-        pass
+    # ASINs are strings, no need to cast to int
+    st.session_state[f"details_{view_id}"] = True
+    st.query_params.clear()
+    st.rerun()
 
 # --- Top Navigation & Search ---
 st.markdown("<h1 style='text-align: center;'>Product Recommend System</h1>", unsafe_allow_html=True)
@@ -169,19 +169,30 @@ search_query = st.text_input("Search", placeholder="e.g. Laptop under 50000, Sam
 # --- Main Content ---
 
 # Combined Filtering Logic
-# Pass both search query and selected category to recommender
-results = rec.recommend(search_query, category=selected_cat, top_n=12)
+# Pass search query, selected category, and simulated user_id to recommender
+results = rec.recommend(search_query, category=selected_cat, top_n=12, user_id=target_user)
 
-# Display Header
-if search_query:
-    if selected_cat != "All":
-        st.subheader(f"Results for '{search_query}' in {selected_cat}")
+# Display Header and Export
+c1, c2 = st.columns([3, 1])
+with c1:
+    if search_query:
+        if selected_cat != "All":
+            st.subheader(f"Results for '{search_query}' in {selected_cat}")
+        else:
+            st.subheader(f"Results for '{search_query}'")
+    elif selected_cat != "All":
+        st.subheader(f"Browsing {selected_cat}")
     else:
-        st.subheader(f"Results for '{search_query}'")
-elif selected_cat != "All":
-    st.subheader(f"Browsing {selected_cat}")
-else:
-    st.subheader("🔥 Trending Now")
+        st.subheader("🔥 Trending Now")
+with c2:
+    if not results.empty:
+        csv = results.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Export results",
+            data=csv,
+            file_name='recommendations.csv',
+            mime='text/csv',
+        )
 
 # Display Results Grid
 if not results.empty:
