@@ -1,1 +1,3 @@
 amz_uk_processed_data.csv
+*.csv
+data/
