@@ -173,7 +173,9 @@ Load Dataset – Import the data with user interactions and product information.
 
 
 ## 🧾 Example Output
-Add example output screenshots, tables, or visualizations showing recommended products, such as:
+# Example output screenshots, tables, or visualizations showing recommended products, such as:
+<img width="1919" height="1013" alt="Screenshot 2025-12-23 144317" src="https://github.com/user-attachments/assets/ddaeaa35-ad82-477c-b899-49c432b6dc9a" />
+
 
 # 📌 “Top 5 product suggestions for user 1234: ...”
 
