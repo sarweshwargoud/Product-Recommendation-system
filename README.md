@@ -73,10 +73,10 @@ The objective of this project is to:
 ## 🧰 Installation
 ## 📊 Dataset
 
-Due to GitHub file size limitations, the dataset is not included in this repository.
+Due to GitHub file size limitations, i donot include the dataset in this repository.
 
-🔗 **Download the dataset here:**  
-(https://www.kaggle.com/datasets/asaniczka/amazon-uk-products-dataset-2023)
+🔗 **U can Download the dataset here👇:**  
+https://www.kaggle.com/datasets/asaniczka/amazon-uk-products-dataset-2023
 
 ### 1️⃣ Clone the Repository
 
