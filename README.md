@@ -173,14 +173,14 @@ Load Dataset – Import the data with user interactions and product information.
 
 
 ## 🧾 Example Output
-# Example output screenshots, tables, or visualizations showing recommended products, such as:
+
 <img width="1919" height="1013" alt="Screenshot 2025-12-23 144317" src="https://github.com/user-attachments/assets/ddaeaa35-ad82-477c-b899-49c432b6dc9a" />
 
 
 # 📌 “Top 5 product suggestions for user 1234: ...”
 
 # 🔮 Future Enhancements
-Here are some ideas that can improve your recommender system:
+We can add some ideas that can improve  recommender system better:
 
 ✔️ Add user-based collaborative filtering
 
@@ -192,8 +192,8 @@ Here are some ideas that can improve your recommender system:
 
 ✔️ Add user authentication and real-time recommendations
 
-## 🤝 Contributing
-Contributions are welcome! To contribute:
+And i will add them in few days.
+
 
 Fork the repository
 
@@ -213,13 +213,11 @@ Create a Pull Request
 This project is licensed under the MIT License.
 
 ## 🔗 References & Further Reading
-A good README helps others understand your project clearly. 
+
 GitHub
 
 Recommendation systems help predict user preferences and suggest relevant items. 
 Wikipedia
-
-If you want, I can tailor this further to your actual code and algorithms used (e.g., collaborative filtering, cosine similarity, streamlit UI, dataset details) — just tell me!
 
 
 
