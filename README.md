@@ -168,9 +168,9 @@ Load Dataset – Import the data with user interactions and product information.
 -rating: User rating for the product
 
 -timestamp: Time of interaction
+# 📊Dataset Link👇
+🔗https://www.kaggle.com/datasets/asaniczka/amazon-uk-products-dataset-2023
 
-# You can also add a link to the dataset if publicly available. 
-GitHub
 
 ## 🧾 Example Output
 Add example output screenshots, tables, or visualizations showing recommended products, such as:
