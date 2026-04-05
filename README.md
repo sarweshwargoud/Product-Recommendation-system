@@ -1,4 +1,4 @@
-# 🛍️ Product Recommendation System
+# 🛍️ Product Recommendation System.
 
 A **Product Recommendation System** that suggests personalized products to users based on their preferences, interactions, and historical behavior.
 
